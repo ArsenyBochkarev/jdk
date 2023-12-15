@@ -1283,6 +1283,14 @@ enum VectorMask {
   INSN(vfsqrt_v,  0b1010111, 0b001, 0b00000, 0b010011);
   INSN(vfclass_v, 0b1010111, 0b001, 0b10000, 0b010011);
 
+  // Vector Reverse Bytes
+  INSN(vrev8_v, 0b1010111, 0b010, 0b01001, 0b010010);
+
+  // Vector Reverse Bits In Elements
+  INSN(vbrev_v,  0b1010111, 0b010, 0b01010, 0b010010);
+  // Vector Reverse Bits In Bytes
+  INSN(vbrev8_v, 0b1010111, 0b010, 0b01000, 0b010010);
+
 #undef INSN
 
 // r2rd
@@ -1333,6 +1341,7 @@ enum VectorMask {
 
   // Vector Slide Instructions
   INSN(vslidedown_vi, 0b1010111, 0b011, 0b001111);
+  INSN(vslideup_vi,   0b1010111, 0b011, 0b001110);
 
 #undef INSN
 
@@ -1447,6 +1456,10 @@ enum VectorMask {
   INSN(vmulhu_vv,  0b1010111, 0b010, 0b100100);
   INSN(vmulh_vv,   0b1010111, 0b010, 0b100111);
   INSN(vmul_vv,    0b1010111, 0b010, 0b100101);
+
+  // Vector Carry-less Multiply
+  INSN(vclmul_vv,  0b1010111, 0b010, 0b001100);
+  INSN(vclmulh_vv, 0b1010111, 0b010, 0b001101);
 
   // Vector Integer Min/Max Instructions
   INSN(vmax_vv,  0b1010111, 0b000, 0b000111);

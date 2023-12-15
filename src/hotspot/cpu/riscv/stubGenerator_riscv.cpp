@@ -2813,6 +2813,584 @@ class StubGenerator: public StubCodeGenerator {
     return entry;
   }
 
+const static uint64_t right_16_bits = right_n_bits(16);
+const static uint64_t right_8_bits = right_n_bits(8);
+void ghash_swap(VectorRegister dest, VectorRegister src, Register scalar_temp) {
+    // Swaps two 64-bit elements of vector
+    __ vsetivli(scalar_temp, 2, Assembler::e64, Assembler::m1);
+
+    __ vslidedown_vi(dest, src, 1);
+    __ vslideup_vi(dest, src, 1);
+  }
+
+  void ghash_pmullh(VectorRegister result, VectorRegister src1, VectorRegister src2,
+                    VectorRegister tmp1, VectorRegister tmp2, Register scalar_temp) {
+    // Vector carry-less multiplication (in the same sense as arm's pmull2) places results in
+    // high elements of two vectors
+    __ vsetivli(scalar_temp, 2, Assembler::e64, Assembler::m1);
+
+    __ vclmulh_vv(result, src1, src2); // Needed result in result[1]
+    __ vclmul_vv(tmp1, src1, src2); // Needed result is in tmp1[1]. Need to place it in result[0]
+    ghash_swap(tmp2, tmp1, scalar_temp); // Needed result now in tmp2[0]
+    __ vmv_x_s(scalar_temp, tmp2); // scalar_temp = tmp2[0]
+    __ vmv_s_x(result, scalar_temp); // result[0] = scalar_temp
+  }
+
+  void ghash_pmull(VectorRegister result, VectorRegister src1, VectorRegister src2, 
+                   VectorRegister tmp, Register scalar_temp) {
+    // Vector carry-less multiplication (in the same sense as arm's pmull) places results in
+    // low elements of two vectors
+    __ vsetivli(scalar_temp, 2, Assembler::e64, Assembler::m1);
+
+    __ vclmulh_vv(tmp, src1, src2); // Needed part of result in tmp[0]. Need to place it in result[1]
+    __ vclmul_vv(result, src1, src2); // Needed part of result is in result[0]
+    __ vslideup_vi(result, tmp, 1); // result[0 + 1] = tmp[0]
+  }
+
+  void ghash_swap_dwords_1_0(VectorRegister dest, VectorRegister source,
+                             VectorRegister v_temp, Register scalar_temp1, Register scalar_temp2) {
+    // Inserts source[0] in dest[1]
+    __ vsetivli(scalar_temp1, 2, Assembler::e64, Assembler::m1);
+    __ vmv_x_s(scalar_temp1, source); // scalar_temp1 = source[0]
+    ghash_swap(v_temp, dest, scalar_temp2);
+
+    __ vmv_s_x(v_temp, scalar_temp1); // v_temp[0] = scalar_temp1
+
+    ghash_swap(dest, v_temp, scalar_temp1);
+  }
+
+  void ghash_swap_dwords_0_1(VectorRegister dest, VectorRegister source,
+                             VectorRegister v_temp, Register scalar_temp) {
+    // Inserts source[1] in dest[0]
+    __ vsetivli(scalar_temp, 2, Assembler::e64, Assembler::m1);
+    ghash_swap(v_temp, source, scalar_temp);
+
+    __ vmv_x_s(scalar_temp, v_temp); // scalar_temp = v_temp[0] (formerly source[1])
+    __ vmv_s_x(dest, scalar_temp); // dest[0] = scalar_temp (formerly source[1])
+  }
+
+  void ghash_multiply(VectorRegister result_lo, VectorRegister result_hi,
+                      VectorRegister a, VectorRegister b, VectorRegister a1_xor_a0,
+                      VectorRegister tmp1, VectorRegister tmp2, VectorRegister tmp3, VectorRegister tmp4,
+                      Register scalar_temp1, Register scalar_temp2) {
+    // Karatsuba multiplication performs a 128*128 -> 256-bit
+    // multiplication in three 128-bit multiplications and a few
+    // additions.
+    //
+    // (C1:C0) = A1*B1, (D1:D0) = A0*B0, (E1:E0) = (A0+A1)(B0+B1)
+    // (A1:A0)(B1:B0) = C1:(C0+C1+D1+E1):(D1+C0+D0+E0):D0
+    //
+    // Inputs:
+    //
+    // A0 in a.d[0]     (subkey)
+    // A1 in a.d[1]
+    // (A1+A0) in a1_xor_a0.d[0]
+    //
+    // B0 in b.d[0]     (state)
+    // B1 in b.d[1]
+
+    // move + swap first 8 bytes and last 8 bytes
+    ghash_swap(tmp1, b, scalar_temp1);
+
+    ghash_pmullh(result_hi, b, a, tmp3, tmp4, scalar_temp1);
+
+    __ vsetivli(scalar_temp1, 16, Assembler::e8, Assembler::m1);
+    __ vxor_vv(tmp1, tmp1, b);
+
+    ghash_pmull(result_lo, b, a, tmp4, scalar_temp1);
+    ghash_pmull(tmp2, tmp1, a1_xor_a0, tmp4, scalar_temp1);
+    // move + swap first 8 bytes and last 8 bytes
+    __ vslidedown_vi(tmp4, result_lo, 1);
+    __ vslideup_vi(tmp4, result_hi, 1);
+    __ vsetivli(scalar_temp1, 16, Assembler::e8, Assembler::m1);
+    __ vxor_vv(tmp3, result_hi, result_lo);
+    __ vxor_vv(tmp2, tmp2, tmp4);
+    __ vxor_vv(tmp2, tmp2, tmp3);
+
+    // Register pair <result_hi:result_lo> holds the result of carry-less multiplication
+    ghash_swap_dwords_0_1(result_hi, tmp2, tmp4, scalar_temp1);
+
+    ghash_swap_dwords_1_0(result_lo, tmp2, tmp4, scalar_temp1, scalar_temp2);
+  }
+
+  void ghash_reduce(VectorRegister result, VectorRegister lo, VectorRegister hi,
+                    VectorRegister p, VectorRegister z, VectorRegister t,
+                    VectorRegister v_temp1, VectorRegister v_temp2, Register scalar_temp) {
+    const VectorRegister tmp = result;
+
+    // The GCM field polynomial f is z^128 + p(z), where p =
+    // z^7+z^2+z+1.
+    //
+    //    z^128 === -p(z)  (mod (z^128 + p(z)))
+    //
+    // so, given that the product we're reducing is
+    //    a == lo + hi * z^128
+    // substituting,
+    //      === lo - hi * p(z)  (mod (z^128 + p(z)))
+    //
+    // we reduce by multiplying hi by p(z) and subtracting the result
+    // from (i.e. XORing it with) lo.  Because p has no nonzero high
+    // bits we can do this with two 64-bit multiplications, lo*p and
+    // hi*p.
+
+    
+    ghash_pmullh(tmp, hi, p, v_temp1, v_temp2, scalar_temp);
+
+    __ vslidedown_vi(t, tmp, 1);
+    __ vslideup_vi(t, z, 1);
+
+    __ vsetivli(scalar_temp, 16, Assembler::e8, Assembler::m1);
+    
+    __ vxor_vv(hi, hi, t);
+
+    __ vsetivli(scalar_temp, 2, Assembler::e64, Assembler::m1);
+    
+    __ vslidedown_vi(t, z, 1);
+    __ vslideup_vi(t, tmp, 1);
+
+    __ vsetivli(scalar_temp, 16, Assembler::e8, Assembler::m1);
+    __ vxor_vv(lo, lo, t);
+
+    ghash_pmull(tmp, hi, p, v_temp1, scalar_temp);
+
+    __ vsetivli(scalar_temp, 16, Assembler::e8, Assembler::m1);
+    __ vxor_vv(result, lo, tmp);
+  }
+
+  /**
+   *  Intrinsified version of void processBlocks(byte[] data, int inOfs, int blocks, long[] st, long[] subH)
+   *  from com.sun.crypto.provider.GHASH package
+   *
+   *  Extensions used: v, zvbb, zvbc
+   *
+   *  Arguments:
+   *
+   *  Input:
+   *  c_rarg0   - current state address (st)
+   *  c_rarg1   - H key address (subH)
+   *  c_rarg2   - data address (data + in0fs)
+   *  c_rarg3   - number of blocks (blocks)
+   *
+   *  Output:
+   *  Updated state at c_rarg0
+   */
+  address generate_ghash_processBlocks() {
+    StubCodeMark mark(this, "StubRoutines", "ghash_processBlocks");
+    __ align(CodeEntryAlignment);
+    address start = __ pc();
+
+    Register state   = c_rarg0;
+    Register subkeyH = c_rarg1;
+    Register data    = c_rarg2;
+    Register blocks  = c_rarg3;
+
+    Register temp0   = t0;
+    Register temp1   = t1;
+
+    VectorRegister vzr = v30;
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vmv_v_x(vzr, zr);
+
+    __ vle64_v(v10, state);
+    __ vle64_v(v1, subkeyH);
+    // Bit-reverse words in state and subkeyH
+    __ vrev8_v(v10, v10);
+    __ vbrev8_v(v10, v10);
+    __ vrev8_v(v1, v1);
+    __ vbrev8_v(v1, v1);
+
+    __ mv(temp0, 0x87);   // The low-order bits of the field
+                          // polynomial (i.e. p = z^7+z^2+z+1)
+                          // repeated in the low and high parts of a
+                          // 128-bit vector
+    __ vmv_v_x(v26, temp0);
+
+    // long-swap subkeyH into v1
+    __ vslidedown_vi(v16, v1, 1);
+    __ vslideup_vi(v16, v1, 1);
+    // xor subkeyH into subkeyL (Karatsuba: (A1+A0))
+    __ vxor_vv(v16, v16, v1);
+
+    {
+      Label L_ghash_loop;
+      __ bind(L_ghash_loop);
+
+      __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+      // Load the data, bit reversing each byte
+      __ vle64_v(v2, data);
+      __ addi(data, data, 0x10);
+
+      __ vsetivli(temp0, 16, Assembler::e8, Assembler::m1);
+      __ vbrev_v(v2, v2);
+
+      // bit-swapped data ^ bit-swapped state
+      __ vxor_vv(v2, v10, v2);
+
+      // Multiply state in v2 by subkey in v1
+      ghash_multiply(/*result_lo*/v5, /*result_hi*/v7,
+                     /*a*/v1, /*b*/v2, /*a1_xor_a0*/v16,
+                     /*temps*/v6, v20, v18, v21, temp0, temp1);
+      // Reduce v7:v5 by the field polynomial
+      ghash_reduce(v10, v5, v7, v26, vzr, v20, v17, v19, temp0);
+
+      __ sub(blocks, blocks, 1);
+      __ bgtz(blocks, L_ghash_loop);
+    }
+
+    // The bit-reversed result is at this point in v10
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vrev8_v(v1, v10);
+    __ vbrev8_v(v1, v1);
+
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vse64_v(v1, state);
+    __ ret();
+
+    return start;
+  }
+
+
+  /***
+   *  Arguments:
+   *
+   *  Inputs:
+   *   c_rarg0   - int   adler
+   *   c_rarg1   - byte* buff
+   *   c_rarg2   - int   len
+   *
+   * Output:
+   *   c_rarg0   - int adler result
+   */
+  address generate_updateBytesAdler32() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesAdler32");
+    address start = __ pc();
+
+    Label L_simple_by1_loop, L_nmax, L_nmax_loop, L_by16, L_by16_loop, L_by1_loop, L_do_mod, L_combine, L_by1;
+
+    // Aliases
+    Register adler  = c_rarg0;
+    Register s1     = c_rarg0;
+    Register s2     = x13;
+    Register buff   = c_rarg1;
+    Register len    = c_rarg2;
+    Register nmax  = x29; // t4
+    Register base  = x30; // t5
+    Register count = x31; // t6
+    Register temp0 = t0;
+    Register temp1 = t1;
+    Register temp2 = t2;
+    Register temp3 = x28; // t3
+
+    // Max number of bytes we can process before having to take the mod
+    // 0x15B0 is 5552 in decimal, the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
+    const uint64_t BASE = 0xfff1;
+    const uint64_t NMAX = 0x15B0;
+
+    __ li(temp3, right_16_bits);
+
+    __ mv(base, BASE);
+    __ mv(nmax, NMAX);
+
+    // s1 is initialized to the lower 16 bits of adler
+    // s2 is initialized to the upper 16 bits of adler
+    __ srli(s2, adler, 16); // s2 = ((adler >> 16) & 0xffff)
+    __ andr(s2, s2, temp3);
+    __ andr(s1, adler, temp3); // s1 = (adler & 0xffff)
+
+    // The pipelined loop needs at least 16 elements for 1 iteration
+    // It does check this, but it is more effective to skip to the cleanup loop
+    __ li(temp0, (u1)16);
+    __ bgeu(len, temp0, L_nmax);
+    __ beqz(len, L_combine);
+
+    __ bind(L_simple_by1_loop);
+    __ lbu(temp0, Address(buff, 0));
+    __ addi(buff, buff, 1);
+    __ add(s1, s1, temp0);
+    __ add(s2, s2, s1);
+    __ sub(len, len, 1);
+    __ bgtz(len, L_simple_by1_loop);
+
+    // s1 = s1 % BASE
+    __ remuw(s1, s1, base);
+
+    // s2 = s2 % BASE
+    __ remuw(s2, s2, base);
+
+    __ j(L_combine);
+
+    __ bind(L_nmax);
+    __ sub(len, len, nmax);
+    __ sub(count, nmax, 16);
+    __ bltz(len, L_by16);
+
+    __ bind(L_nmax_loop);
+
+    __ ld(temp0, Address(buff, 0));
+    __ ld(temp1, Address(buff, sizeof(jlong)));
+    __ addi(buff, buff, 16);
+
+    __ andi(temp2, temp0, right_8_bits);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 8);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 16);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 24);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 32);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 40);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 48);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+    __ srli(temp2, temp0, 56);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+
+    __ andi(temp2, temp1, right_8_bits);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 8);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 16);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 24);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 32);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 40);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 48);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+    __ srli(temp2, temp1, 56);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+
+    __ sub(count, count, 16);
+    __ bgez(count, L_nmax_loop);
+
+    // s1 = s1 % BASE
+    __ remuw(s1, s1, base);
+
+    // s2 = s2 % BASE
+    __ remuw(s2, s2, base);
+
+    __ sub(len, len, nmax);
+    __ sub(count, nmax, 16);
+    __ bgez(len, L_nmax_loop);
+
+    __ bind(L_by16);
+    __ add(len, len, count);
+    __ bltz(len, L_by1);
+
+    __ bind(L_by16_loop);
+
+    __ ld(temp0, Address(buff, 0));
+    __ ld(temp1, Address(buff, sizeof(jlong)));
+    __ addi(buff, buff, 16);
+
+    __ andi(temp2, temp0, right_8_bits);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 8);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 16);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 24);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 32);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 40);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp0, 48);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+    __ srli(temp2, temp0, 56);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+
+    __ andi(temp2, temp1, right_8_bits);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 8);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 16);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 24);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 32);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 40);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ srli(temp2, temp1, 48);
+    __ andi(temp2, temp2, right_8_bits);
+    __ add(s2, s2, s1);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+    __ srli(temp2, temp1, 56);
+    __ add(s1, s1, temp2);
+    __ add(s2, s2, s1);
+
+    __ sub(len, len, 16);
+    __ bgez(len, L_by16_loop);
+
+    __ bind(L_by1);
+    __ add(len, len, 15);
+    __ bltz(len, L_do_mod);
+
+    __ bind(L_by1_loop);
+    __ lbu(temp0, Address(buff, 0));
+    __ addi(buff, buff, 1);
+    __ add(s1, temp0, s1);
+    __ add(s2, s2, s1);
+    __ sub(len, len, 1);
+    __ bgez(len, L_by1_loop);
+
+    __ bind(L_do_mod);
+    // s1 = s1 % BASE
+    __ remuw(s1, s1, base);
+
+    // s2 = s2 % BASE
+    __ remuw(s2, s2, base);
+
+    // Combine lower bits and higher bits
+    // adler = s1 | (s2 << 16)
+    __ bind(L_combine);
+    __ slli(s2, s2, 16);
+    __ orr(s1, s1, s2);
+
+    __ ret();
+
+    return start;
+  }
+
+
+  /**
+   *  Arguments:
+   *
+   * Inputs:
+   *   c_rarg0   - int crc
+   *   c_rarg1   - byte* buf
+   *   c_rarg2   - int length
+   *
+   * Output:
+   *       rax   - int crc result
+   */
+  address generate_updateBytesCRC32() {
+    assert(UseCRC32Intrinsics, "what are we doing here?");
+
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesCRC32");
+
+    address start = __ pc();
+
+    const Register crc    = c_rarg0;  // crc
+    const Register buf    = c_rarg1;  // source java byte array address
+    const Register len    = c_rarg2;  // length
+    const Register table0 = c_rarg3;  // crc_table address
+    const Register table1 = c_rarg4;
+    const Register table2 = c_rarg5;
+    const Register table3 = c_rarg6;
+
+    const Register tmp1 = t0;
+    const Register tmp2 = t1;
+    const Register tmp3 = t2;
+    const Register tmp4 = x28; // t3
+    const Register tmp5 = x29; // t4
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    __ kernel_crc32(crc, buf, len, table0, table1, table2,
+              table3, tmp1, tmp2, tmp3, tmp4, tmp5, false);
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret();
+
+    return start;
+  }
+
+  address generate_updateBytesCRC32C() {
+    assert(UseCRC32CIntrinsics, "what are we doing here?");
+
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesCRC32C");
+
+    address start = __ pc();
+
+    const Register crc    = c_rarg0;  // crc
+    const Register buf    = c_rarg1;  // source java byte array address
+    const Register len    = c_rarg2;  // length
+    const Register table0 = c_rarg3;  // crc_table address
+    const Register table1 = c_rarg4;
+    const Register table2 = c_rarg5;
+    const Register table3 = c_rarg6;
+
+    const Register tmp1 = t0;
+    const Register tmp2 = t1;
+    const Register tmp3 = t2;
+    const Register tmp4 = x28; // t3
+    const Register tmp5 = x29; // t4
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    __ kernel_crc32(crc, buf, len, table0, table1, table2,
+              table3, tmp1, tmp2, tmp3, tmp4, tmp5, true);
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret();
+
+    return start;
+  }
+
   /**
    *  Arguments:
    *
@@ -4765,6 +5343,26 @@ static const int64_t right_3_bits = right_n_bits(3);
       generate_throw_exception("delayed StackOverflowError throw_exception",
                                CAST_FROM_FN_PTR(address,
                                                 SharedRuntime::throw_delayed_StackOverflowError));
+
+    if (UseCRC32Intrinsics) {
+      // set table address before stub generation which use it
+      StubRoutines::_crc_table_adr = (address)StubRoutines::riscv::_crc_table;
+      StubRoutines::_updateBytesCRC32 = generate_updateBytesCRC32();
+    }
+
+    if (UseCRC32CIntrinsics) {
+      StubRoutines::_crc32c_table_addr = (address)StubRoutines::riscv::_crc32c_table;
+      StubRoutines::_updateBytesCRC32C = generate_updateBytesCRC32C();
+    }
+
+    if (UseGHASHIntrinsics) {
+      StubRoutines::_ghash_processBlocks = generate_ghash_processBlocks();
+    }
+
+    if (UseAdler32Intrinsics) {
+      StubRoutines::_updateBytesAdler32 = generate_updateBytesAdler32();
+    }
+
   }
 
   void generate_continuation_stubs() {
