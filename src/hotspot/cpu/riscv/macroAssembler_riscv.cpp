@@ -3644,8 +3644,8 @@ void MacroAssembler::mul_add(Register out, Register in, Register offset,
   bind(L_end);
 }
 
-static const int64_t bits32 = right_n_bits(32);
-static const int64_t bits8 = right_n_bits(8);
+static const int64_t right_32_bits = right_n_bits(32);
+static const int64_t right_8_bits = right_n_bits(8);
 
 /**
  * Emits code to update CRC-32 with a byte value according to constants in table
@@ -3663,10 +3663,9 @@ void MacroAssembler::update_byte_crc32(Register crc, Register val, Register tabl
   assert_different_registers(crc, val, table);
 
   xorr(val, val, crc);
-  andi(val, val, bits8);
-  slli(val, val, 2);
-  add(val, table, val);
-  Assembler::lwu(val, val, 0);
+  andi(val, val, right_8_bits);
+  shadd(val, val, table, val, 2);
+  lwu(val, Address(val));
   srli(crc, crc, 8);
   xorr(crc, val, crc);
 }
@@ -3686,37 +3685,53 @@ void MacroAssembler::update_byte_crc32(Register crc, Register val, Register tabl
  *   crc = table3[v&0xff]^table2[(v>>8)&0xff]^table1[(v>>16)&0xff]^table0[v>>24]
  *
  */
-void MacroAssembler::update_word_crc32(Register crc, Register v, Register tmp1, Register tmp2,
-        Register table0, Register table1, Register table2, Register table3, bool upper) {
-  assert_different_registers(crc, v, tmp1, tmp2, table0, table1, table2, table3);
+void MacroAssembler::update_word_crc32(Register crc, Register v, Register tmp0,
+        Register tmp1, Register table0, Register table1, Register table2,
+        Register table3, bool upper) {
+  assert_different_registers(crc, v, tmp0, tmp1, table0, table1, table2, table3);
 
   if (upper)
     srli(v, v, 32);
-  xorr(v, crc, v);
+  xorr(v, v, crc);
 
-  andi(tmp1, v, bits8);
-  shadd(tmp1, tmp1, table3, tmp2, 2);
-  Assembler::lwu(crc, tmp1, 0);
+  andi(tmp1, v, right_8_bits);
+  shadd(tmp1, tmp1, table3, tmp0, 2);
+  lwu(crc, Address(tmp1));
+
+  // In order to access table elements according to initial algorithm
+  // the following actions should be performed (with no Zba enabled):
+  //  tmp1 = v >> 8
+  //  tmp1 = tmp1 & right_8_bits
+  //  tmp1 = tmp1 << 2
+  //  tmp1 += table2
+  // Which is the same as:
+  //  tmp1 = v >> 6
+  //  tmp1 = tmp1 & (right_8_bits << 2)
+  //  tmp1 += table2
 
   srli(tmp1, v, 6);
-  andi(tmp1, tmp1, (bits8 << 2));
+  andi(tmp1, tmp1, (right_8_bits << 2));
   add(tmp1, tmp1, table2);
-  Assembler::lwu(tmp2, tmp1, 0);
+  lwu(tmp0, Address(tmp1));
 
   srli(tmp1, v, 14);
-  xorr(crc, crc, tmp2);
-
-  andi(tmp1, tmp1, (bits8 << 2));
+  andi(tmp1, tmp1, (right_8_bits << 2));
   add(tmp1, tmp1, table1);
-  Assembler::lwu(tmp2, tmp1, 0);
+  xorr(crc, crc, tmp0);
 
-  srli(tmp1, v, 22);
-  xorr(crc, crc, tmp2);
+  lwu(tmp0, Address(tmp1));
+  if (upper) {
+    tmp1 = v;
+    srli(tmp1, v, 24);
+  }
+  else
+    srliw(tmp1, v, 24);
 
-  andi(tmp1, tmp1, (bits8 << 2));
-  add(tmp1, tmp1, table0);
-  Assembler::lwu(tmp2, tmp1, 0);
-  xorr(crc, crc, tmp2);
+  // no need to clear bits other than lowest two
+  shadd(tmp1, tmp1, table0, tmp1, 2);
+  xorr(crc, crc, tmp0);
+  lwu(tmp0, Address(tmp1));
+  xorr(crc, crc, tmp0);
 }
 
 /**
@@ -3733,19 +3748,16 @@ void MacroAssembler::kernel_crc32(Register crc, Register buf, Register len,
   assert_different_registers(crc, buf, table0, table1, table2, table3, tmp, tmp2, tmp3, tmp4, tmp5);
   Label L_by16_loop, L_unroll_loop, L_unroll_loop_entry, L_by4, L_by4_loop, L_by1, L_by1_loop, L_exit;
 
-  mv(tmp5, bits32);
-  if (!is_crc32c) {
-    notr(crc, crc);
-  }
-  andr(crc, crc, tmp5);
-
   const int64_t unroll = 16;
   const int64_t unroll_words = unroll*wordSize;
   mv(tmp5, right_32_bits);
   subw(len, len, unroll_words);
-  andn(crc, tmp5, crc);
+  if (!is_crc32c) {
+    notr(crc, crc);
+  }
+  andr(crc, tmp5, crc);
 
-  const ExternalAddress table_addr = StubRoutines::crc_table_addr();
+  const ExternalAddress table_addr = is_crc32c ? StubRoutines::crc32c_table_addr() : StubRoutines::crc_table_addr();
   la(table0, table_addr);
   add(table1, table0, 1*256*sizeof(juint), tmp);
   add(table2, table0, 2*256*sizeof(juint), tmp);
@@ -3799,7 +3811,7 @@ void MacroAssembler::kernel_crc32(Register crc, Register buf, Register len,
     if (!is_crc32c) {
       notr(crc, crc);
     }
-    andr(crc, crc, tmp5);
+    andr(crc, tmp5, crc);
 }
 
 // Multiply and multiply-accumulate unsigned 64-bit registers.
