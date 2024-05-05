@@ -179,22 +179,6 @@ void VM_Version::initialize() {
     FLAG_SET_DEFAULT(UseCRC32CIntrinsics, true);
   }
 
-  if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
-    FLAG_SET_DEFAULT(UseAESIntrinsics, true);
-  }
-
-  if (FLAG_IS_DEFAULT(UseAES)) {
-    FLAG_SET_DEFAULT(UseAES, true);
-  }
-
-  if (FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
-    FLAG_SET_DEFAULT(UseAESCTRIntrinsics, true);
-  }
-
-  if (FLAG_IS_DEFAULT(UseGHASHIntrinsics)) {
-    FLAG_SET_DEFAULT(UseGHASHIntrinsics, true);
-  }
-
   if (UseVectorizedMismatchIntrinsic) {
     warning("VectorizedMismatch intrinsic is not available on this CPU.");
     FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
@@ -286,6 +270,22 @@ void VM_Version::initialize() {
   // NOTE: Make sure codes dependent on UseRVV are put after c2_initialize(),
   //       as there are extra checks inside it which could disable UseRVV
   //       in some situations.
+
+  if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+    FLAG_SET_DEFAULT(UseAESIntrinsics, true);
+  }
+
+  if (FLAG_IS_DEFAULT(UseAES)) {
+    FLAG_SET_DEFAULT(UseAES, true);
+  }
+
+  if (FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+    FLAG_SET_DEFAULT(UseAESCTRIntrinsics, true);
+  }
+
+  if (FLAG_IS_DEFAULT(UseGHASHIntrinsics)) {
+    FLAG_SET_DEFAULT(UseGHASHIntrinsics, true);
+  }
 
   // Adler32
   if (UseRVV) {
