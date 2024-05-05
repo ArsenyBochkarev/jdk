@@ -4508,13 +4508,83 @@ void ghash_swap(VectorRegister dest, VectorRegister src, Register scalar_temp) {
     return start;
   }
 
+  void generate_updateBytesAdler32_accum(Register buff, VectorRegister vzero, VectorRegister vbytes,
+    VectorRegister vs1acc, VectorRegister vs2acc, VectorRegister vtable) {
+    // Below is a vectorized implementation of updating s1 and s2 for 16 bytes.
+    // We use b1, b2, ..., b16 to denote the 16 bytes loaded in each iteration.
+    // In non-vectorized code, we update s1 and s2 as:
+    //   s1 <- s1 + b1
+    //   s2 <- s2 + s1
+    //   s1 <- s1 + b2
+    //   s2 <- s2 + b1
+    //   ...
+    //   s1 <- s1 + b16
+    //   s2 <- s2 + s1
+    // Putting above assignments together, we have:
+    //   s1_new = s1 + b1 + b2 + ... + b16
+    //   s2_new = s2 + (s1 + b1) + (s1 + b1 + b2) + ... + (s1 + b1 + b2 + ... + b16)
+    //          = s2 + s1 * 16 + (b1 * 16 + b2 * 15 + ... + b16 * 1)
+    //          = s2 + s1 * 16 + (b1, b2, ... b16) dot (16, 15, ... 1)
+    //
+    // To add more acceleration, it is possible to postpone final summation
+    // until all unrolled calculations are done.
+
+    // Load data
+    __ vle8_v(vbytes, buff);
+    __ addi(buff, buff, 16);
+
+    // vs1acc = b1 + b2 + b3 + ... + b16
+    __ vwredsumu_vs(vs1acc, vbytes, vzero);
+
+    // vs2acc = { (b1 * 16), (b2 * 15), (b3 * 14), ..., (b8 * 9) }
+    // vs2acc->successor() = { (b9 * 8), (b10 * 7), (b11 * 6), ..., (b16 * 1) }
+    __ vwmulu_vv(vs2acc, vtable, vbytes); // vs2acc->successor() now contains the second part of multiplication
+    // The only thing that remains is to sum up the remembered result
+  }
+
+  void generate_updateBytesAdler32_unroll(Register buff, Register s1, Register s2, int unroll_factor,
+    VectorRegister vtable, VectorRegister vbytes, VectorRegister vzero, VectorRegister *unroll_regs,
+    Register temp0, Register temp1, Register temp2, VectorRegister vtemp1, VectorRegister vtemp2) {
+
+    assert(unroll_factor <= 8, "Not enough vector registers in unroll_regs");
+    // Below is partial loop unrolling for updateBytesAdler32:
+    // First, the unroll*16 bytes are processed, the results are in
+    // v4, v5, v6, ..., v25, v26, v27
+    // Second, the final summation for unrolled part of the loop should be performed
+
+    __ vsetivli(temp0, 16, Assembler::e8, Assembler::m1);
+    for (int i = 0; i < unroll_factor; i++)
+      generate_updateBytesAdler32_accum(buff, vzero, vbytes, unroll_regs[i], unroll_regs[i + 8], vtable);
+    // Summing up
+    __ vsetivli(temp0, 8, Assembler::e16, Assembler::m1);
+    for (int i = 0; i < unroll_factor; i++) {
+      // s2 = s2 + s1 * 16
+      __ slli(temp1, s1, 4);
+      __ add(s2, s2, temp1);
+
+      // 0xFF * 0x10 = 0xFF0, 0xFF0 * 8 = 7F80, so:
+      // 1. No need to do vector-widening reduction sum
+      // 2. It is safe to perform sign-extension during vmv.x.s
+      __ vredsum_vs(vtemp1, unroll_regs[i + 8], vzero);
+      __ vredsum_vs(vtemp2, unroll_regs[i + 8]->successor(), vzero);
+
+      __ vmv_x_s(temp0, unroll_regs[i]);
+      __ vmv_x_s(temp1, vtemp1);
+      __ vmv_x_s(temp2, vtemp2);
+      __ add(s1, s1, temp0);
+      __ add(s2, s2, temp1);
+      __ add(s2, s2, temp2);
+    }
+  }
 
   /***
+   *  int java.util.zip.Adler32.updateBytes(int adler, byte[] b, int off, int len)
+   *
    *  Arguments:
    *
    *  Inputs:
    *   c_rarg0   - int   adler
-   *   c_rarg1   - byte* buff
+   *   c_rarg1   - byte* buff (b + off)
    *   c_rarg2   - int   len
    *
    * Output:
@@ -4525,45 +4595,75 @@ void ghash_swap(VectorRegister dest, VectorRegister src, Register scalar_temp) {
     StubCodeMark mark(this, "StubRoutines", "updateBytesAdler32");
     address start = __ pc();
 
-    Label L_simple_by1_loop, L_nmax, L_nmax_loop, L_by16, L_by16_loop, L_by1_loop, L_do_mod, L_combine, L_by1;
+    Label L_simple_by1_loop, L_nmax, L_nmax_loop, L_nmax_loop_entry, L_by16, L_by16_loop, L_by1_loop, L_do_mod, L_combine, L_by1;
 
     // Aliases
     Register adler  = c_rarg0;
     Register s1     = c_rarg0;
-    Register s2     = x13;
+    Register s2     = c_rarg3;
     Register buff   = c_rarg1;
     Register len    = c_rarg2;
     Register nmax  = x29; // t4
     Register base  = x30; // t5
     Register count = x31; // t6
-    Register temp0 = t0;
-    Register temp1 = t1;
-    Register temp2 = t2;
-    Register temp3 = x28; // t3
+    Register temp0 = c_rarg4;
+    Register temp1 = c_rarg5;
+    Register temp2 = c_rarg6;
+    Register buf_end = c_rarg7;
+
+    VectorRegister vbytes = v1;
+    VectorRegister vtable = v2;
+    VectorRegister vzero = v3;
+    VectorRegister unroll_regs[] = {
+      v4, v5, v6, v7, v8, v9, v10, v11,
+      v12, v14, v16, v18, v20, v22, v24, v26
+    };
+    VectorRegister vtemp1 = v28;
+    VectorRegister vtemp2 = v29;
 
     // Max number of bytes we can process before having to take the mod
     // 0x15B0 is 5552 in decimal, the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
     const uint64_t BASE = 0xfff1;
     const uint64_t NMAX = 0x15B0;
 
-    __ li(temp3, right_16_bits);
+    // Unroll factor for L_nmax loop
+    const int unroll = 8;
+
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+    __ vsetivli(temp0, 16, Assembler::e8, Assembler::m1);
+
+    // Generating accumulation coefficients for further calculations
+    __ vid_v(vtemp1);
+    __ mv(temp0, 16);
+    __ vmv_v_x(vtable, temp0);
+    __ vsub_vv(vtable, vtable, vtemp1);
+    // vtable now contains { 0x10, 0xf, 0xe, ..., 0x3, 0x2, 0x1 }
+
+    __ vmv_v_i(vzero, 0);
 
     __ mv(base, BASE);
     __ mv(nmax, NMAX);
 
+    __ srli(s2, adler, 16); // s2 = ((adler >> 16) & 0xffff)
     // s1 is initialized to the lower 16 bits of adler
     // s2 is initialized to the upper 16 bits of adler
-    __ srli(s2, adler, 16); // s2 = ((adler >> 16) & 0xffff)
-    __ andr(s2, s2, temp3);
-    __ andr(s1, adler, temp3); // s1 = (adler & 0xffff)
+    if (!UseZbb) {
+      const uint64_t right_16_bits = right_n_bits(16);
+      __ mv(temp0, right_16_bits);
+      __ andr(s2, s2, temp0);
+      __ andr(s1, adler, temp0); // s1 = (adler & 0xffff)
+    } else {
+      __ zext_h(s2, s2);
+      __ zext_h(s1, adler);
+    }
 
     // The pipelined loop needs at least 16 elements for 1 iteration
     // It does check this, but it is more effective to skip to the cleanup loop
-    __ li(temp0, (u1)16);
+    __ mv(temp0, (u1)16);
     __ bgeu(len, temp0, L_nmax);
     __ beqz(len, L_combine);
 
-    __ bind(L_simple_by1_loop);
+  __ bind(L_simple_by1_loop);
     __ lbu(temp0, Address(buff, 0));
     __ addi(buff, buff, 1);
     __ add(s1, s1, temp0);
@@ -4573,178 +4673,57 @@ void ghash_swap(VectorRegister dest, VectorRegister src, Register scalar_temp) {
 
     // s1 = s1 % BASE
     __ remuw(s1, s1, base);
-
     // s2 = s2 % BASE
     __ remuw(s2, s2, base);
 
     __ j(L_combine);
 
-    __ bind(L_nmax);
+  __ bind(L_nmax);
     __ sub(len, len, nmax);
     __ sub(count, nmax, 16);
     __ bltz(len, L_by16);
 
-    __ bind(L_nmax_loop);
+  __ bind(L_nmax_loop_entry);
+    // buf_end will be used as endpoint for loop below
+    __ add(buf_end, buff, count); // buf_end will be used as endpoint for loop below
+    __ sub(buf_end, buf_end, 32); // After partial unrolling 3 additional iterations are required,
+                                  // and bytes for one of them are already subtracted
 
-    __ ld(temp0, Address(buff, 0));
-    __ ld(temp1, Address(buff, sizeof(jlong)));
-    __ addi(buff, buff, 16);
+  __ bind(L_nmax_loop);
+    generate_updateBytesAdler32_unroll(buff, s1, s2, unroll, vtable, vbytes,
+      vzero, unroll_regs, temp0, temp1, temp2, vtemp1, vtemp2);
+    __ blt(buff, buf_end, L_nmax_loop);
 
-    __ andi(temp2, temp0, right_8_bits);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 8);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 16);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 24);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 32);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 40);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 48);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-    __ srli(temp2, temp0, 56);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-
-    __ andi(temp2, temp1, right_8_bits);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 8);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 16);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 24);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 32);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 40);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 48);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-    __ srli(temp2, temp1, 56);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-
-    __ sub(count, count, 16);
-    __ bgez(count, L_nmax_loop);
+    const int remainder = ((NMAX / 16) % unroll);
+    // Do the calculations for remaining 16*remainder bytes
+    generate_updateBytesAdler32_unroll(buff, s1, s2, remainder, vtable, vbytes,
+      vzero, unroll_regs, temp0, temp1, temp2, vtemp1, vtemp2);
 
     // s1 = s1 % BASE
     __ remuw(s1, s1, base);
-
     // s2 = s2 % BASE
     __ remuw(s2, s2, base);
 
     __ sub(len, len, nmax);
     __ sub(count, nmax, 16);
-    __ bgez(len, L_nmax_loop);
+    __ bgez(len, L_nmax_loop_entry);
 
-    __ bind(L_by16);
+  __ bind(L_by16);
     __ add(len, len, count);
     __ bltz(len, L_by1);
 
-    __ bind(L_by16_loop);
-
-    __ ld(temp0, Address(buff, 0));
-    __ ld(temp1, Address(buff, sizeof(jlong)));
-    __ addi(buff, buff, 16);
-
-    __ andi(temp2, temp0, right_8_bits);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 8);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 16);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 24);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 32);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 40);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp0, 48);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-    __ srli(temp2, temp0, 56);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-
-    __ andi(temp2, temp1, right_8_bits);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 8);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 16);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 24);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 32);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 40);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ srli(temp2, temp1, 48);
-    __ andi(temp2, temp2, right_8_bits);
-    __ add(s2, s2, s1);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
-    __ srli(temp2, temp1, 56);
-    __ add(s1, s1, temp2);
-    __ add(s2, s2, s1);
+  __ bind(L_by16_loop);
+    generate_updateBytesAdler32_unroll(buff, s1, s2, 1, vtable, vbytes,
+      vzero, unroll_regs, temp0, temp1, temp2, vtemp1, vtemp2);
 
     __ sub(len, len, 16);
     __ bgez(len, L_by16_loop);
 
-    __ bind(L_by1);
+  __ bind(L_by1);
     __ add(len, len, 15);
     __ bltz(len, L_do_mod);
 
-    __ bind(L_by1_loop);
+  __ bind(L_by1_loop);
     __ lbu(temp0, Address(buff, 0));
     __ addi(buff, buff, 1);
     __ add(s1, temp0, s1);
@@ -4752,24 +4731,23 @@ void ghash_swap(VectorRegister dest, VectorRegister src, Register scalar_temp) {
     __ sub(len, len, 1);
     __ bgez(len, L_by1_loop);
 
-    __ bind(L_do_mod);
+  __ bind(L_do_mod);
     // s1 = s1 % BASE
     __ remuw(s1, s1, base);
-
     // s2 = s2 % BASE
     __ remuw(s2, s2, base);
 
     // Combine lower bits and higher bits
     // adler = s1 | (s2 << 16)
-    __ bind(L_combine);
+  __ bind(L_combine);
     __ slli(s2, s2, 16);
     __ orr(s1, s1, s2);
 
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
     __ ret();
 
     return start;
   }
-
 
   /**
    *  Arguments:
