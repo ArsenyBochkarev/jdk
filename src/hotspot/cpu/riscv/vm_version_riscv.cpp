@@ -183,6 +183,18 @@ void VM_Version::initialize() {
     FLAG_SET_DEFAULT(UseAdler32Intrinsics, true);
   }
 
+  if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+    FLAG_SET_DEFAULT(UseAESIntrinsics, true);
+  }
+
+  if (FLAG_IS_DEFAULT(UseAES)) {
+    FLAG_SET_DEFAULT(UseAES, true);
+  }
+
+  if (FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+    FLAG_SET_DEFAULT(UseAESCTRIntrinsics, true);
+  }
+
   if (FLAG_IS_DEFAULT(UseGHASHIntrinsics)) {
     FLAG_SET_DEFAULT(UseGHASHIntrinsics, true);
   }

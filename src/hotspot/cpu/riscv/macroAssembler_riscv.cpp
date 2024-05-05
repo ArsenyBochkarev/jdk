@@ -4251,6 +4251,226 @@ void MacroAssembler::multiply_to_len(Register x, Register xlen, Register y, Regi
 
   bind(L_done);
 }
+
+// Load expanded key into v17..v31
+void MacroAssembler::aesenc_loadkeys(Register key, Register keylen, Register temp1) {
+  Label L_loadkeys_44, L_loadkeys_52;
+  mv(temp1, 52);
+  blt(keylen, temp1, L_loadkeys_44);
+  beq(keylen, temp1, L_loadkeys_52);
+
+  vle64_v(v17, key);
+  addi(key, key, 16);
+  vle64_v(v18, key);
+  addi(key, key, 16);
+
+  vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+  vrev8_v(v17, v17);
+  vrev8_v(v18, v18);
+
+  vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+bind(L_loadkeys_52);
+  vle64_v(v19, key);
+  addi(key, key, 16);
+  vle64_v(v20, key);
+  addi(key, key, 16);
+
+  vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+  vrev8_v(v19, v19);
+  vrev8_v(v20, v20);
+
+  vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+bind(L_loadkeys_44);
+  vle64_v(v21, key);
+  addi(key, key, 16);
+  vle64_v(v22, key);
+  addi(key, key, 16);
+  vle64_v(v23, key);
+  addi(key, key, 16);
+  vle64_v(v24, key);
+  addi(key, key, 16);
+
+  vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+  vrev8_v(v21, v21);
+  vrev8_v(v22, v22);
+  vrev8_v(v23, v23);
+  vrev8_v(v24, v24);
+
+  vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+  vle64_v(v25, key);
+  addi(key, key, 16);
+  vle64_v(v26, key);
+  addi(key, key, 16);
+  vle64_v(v27, key);
+  addi(key, key, 16);
+  vle64_v(v28, key);
+  addi(key, key, 16);
+
+  vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+  vrev8_v(v25, v25);
+  vrev8_v(v26, v26);
+  vrev8_v(v27, v27);
+  vrev8_v(v28, v28);
+
+  vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+  vle64_v(v29, key);
+  addi(key, key, 16);
+  vle64_v(v30, key);
+  addi(key, key, 16);
+  vle64_v(v31, key);
+  addi(key, key, 16);
+
+  vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+  vrev8_v(v29, v29);
+  vrev8_v(v30, v30);
+  vrev8_v(v31, v31);
+
+  vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+  // Preserve the address of the start of the key
+  // sub(key, key, keylen, LSL, exact_log2(sizeof (jint)));
+  slli(temp1, keylen, exact_log2(sizeof (jint)));
+  sub(key, key, temp1);
+}
+
+// KernelGenerator
+//
+// The abstract base class of an unrolled function generator.
+// Subclasses override generate(), length(), and next() to generate
+// unrolled and interleaved functions.
+//
+// The core idea is that a subclass defines a method which generates
+// the base case of a function and a method to generate a clone of it,
+// shifted to a different set of registers. KernelGenerator will then
+// generate several interleaved copies of the function, with each one
+// using a different set of registers.
+
+// The subclass must implement three methods: length(), which is the
+// number of instruction bundles in the intrinsic, generate(int n)
+// which emits the nth instruction bundle in the intrinsic, and next()
+// which takes an instance of the generator and returns a version of it,
+// shifted to a new set of registers.
+
+class KernelGenerator: public MacroAssembler {
+protected:
+  const int _unrolls;
+public:
+  KernelGenerator(Assembler *as, int unrolls)
+    : MacroAssembler(as->code()), _unrolls(unrolls) { }
+  virtual void generate(int index) = 0;
+  virtual int length() = 0;
+  virtual KernelGenerator *next() = 0;
+  int unrolls() { return _unrolls; }
+  void unroll();
+};
+
+void KernelGenerator::unroll() {
+  ResourceMark rm;
+  KernelGenerator **generators
+    = NEW_RESOURCE_ARRAY(KernelGenerator *, unrolls());
+
+  generators[0] = this;
+  for (int i = 1; i < unrolls(); i++) {
+    generators[i] = generators[i-1]->next();
+  }
+
+  for (int j = 0; j < length(); j++) {
+    for (int i = 0; i < unrolls(); i++) {
+      generators[i]->generate(j);
+    }
+  }
+}
+
+// An unrolled and interleaved generator for AES encryption.
+class AESKernelGenerator: public KernelGenerator {
+  Register _from, _to;
+  const Register _keylen;
+  VectorRegister _data;
+  const VectorRegister *_subkeys;
+  bool _once;
+  Label _rounds_44, _rounds_52;
+  VectorRegister _vtemp;
+
+public:
+  AESKernelGenerator(Assembler *as, int unrolls, Register from, Register to,
+                     Register keylen, VectorRegister vtemp, VectorRegister data,
+                     const VectorRegister *subkeys, bool once = true)
+    : KernelGenerator(as, unrolls),
+      _from(from), _to(to), _keylen(keylen), _data(data),
+      _vtemp(vtemp), _subkeys(subkeys), _once(once) {
+  }
+
+  virtual void generate(int index) {
+    switch (index) {
+    case  0:
+      if (_from != noreg) {
+        vsetivli(t0, 2, Assembler::e64, Assembler::m1);
+        vle64_v(_data, _from);
+      }
+      vsetivli(t0, 4, Assembler::e32, Assembler::m1);
+      break;
+    case  1:
+      if (_once) {
+        mv(t0, 52);
+        blt(_keylen, t0, _rounds_44);
+        beq(_keylen, t0, _rounds_52);
+
+      }
+      break;
+    case  2:  vxor_vv(_data, _data, _subkeys[0]); vaesem_vv(_data, _subkeys[1]);  break;
+    case  3:  vaesem_vv(_data, _vtemp);  break;
+    case  4:
+      if (_once)  bind(_rounds_52);
+      break;
+    case  5:  vxor_vv(_data, _data, _subkeys[2]); vaesem_vv(_data, _subkeys[3]);  break;
+    case  6:  vaesem_vv(_data, _vtemp);  break;
+    case  7:
+      if (_once)  bind(_rounds_44);
+      break;
+    case  8:  vxor_vv(_data, _data, _subkeys[4]);  vaesem_vv(_data, _vtemp); break;
+    case  9:  vxor_vv(_data, _data, _subkeys[5]);  vaesem_vv(_data, _vtemp); break;
+    case 10:  vxor_vv(_data, _data, _subkeys[6]);  vaesem_vv(_data, _vtemp); break;
+    case 11:  vxor_vv(_data, _data, _subkeys[7]);  vaesem_vv(_data, _vtemp); break;
+    case 12:  vxor_vv(_data, _data, _subkeys[8]);  vaesem_vv(_data, _vtemp); break;
+    case 13:  vxor_vv(_data, _data, _subkeys[9]);  vaesem_vv(_data, _vtemp); break;
+    case 14:  vxor_vv(_data, _data, _subkeys[10]); vaesem_vv(_data, _vtemp); break;
+    case 15:  vxor_vv(_data, _data, _subkeys[11]); vaesem_vv(_data, _vtemp); break;
+    case 16:  vxor_vv(_data, _data, _subkeys[12]); vaesem_vv(_data, _vtemp); break;
+    case 17:  vxor_vv(_data, _data, _subkeys[13]); vaesef_vv(_data, _vtemp); break;
+    case 18:  vxor_vv(_data, _data, _subkeys[14]); break;
+    case 19:
+      vsetivli(t0, 2, Assembler::e64, Assembler::m1);
+      if (_to != noreg) {
+        vse64_v(_data, _to);
+      }
+      break;
+    default: ShouldNotReachHere();
+    }
+  }
+
+  virtual KernelGenerator *next() {
+    return new AESKernelGenerator(this, _unrolls,
+                                  _from, _to, _keylen, _vtemp,
+                                  _data->successor(), _subkeys, /*once*/false);
+  }
+
+  virtual int length() { return 20; }
+};
+
+// Uses expanded key in v17..v31
+// Returns encrypted values in inputs.
+// If to != noreg, store value at to; likewise from
+// Preserves key, keylen
+// Increments from, to
+// Input data in v0, v1, ...
+// unrolls controls the number of times to unroll the generated function
+void MacroAssembler::aesecb_encrypt(Register from, Register to, Register keylen, const VectorRegister *vectors,
+                                    VectorRegister vtemp, VectorRegister data, int unrolls) {
+  AESKernelGenerator(this, unrolls, from, to, keylen, vtemp, data, vectors) .unroll();
+}
+
 #endif
 
 // Count bits of trailing zero chars from lsb to msb until first non-zero element.

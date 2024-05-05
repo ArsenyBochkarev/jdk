@@ -2258,6 +2258,1465 @@ class StubGenerator: public StubCodeGenerator {
     StubRoutines::_arrayof_jint_fill = generate_fill(T_INT, true, "arrayof_jint_fill");
   }
 
+
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //
+  address generate_aescrypt_encryptBlock() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "aescrypt_encryptBlock");
+
+    Label L_doLast;
+
+    const Register from        = c_rarg0;  // source array address
+    const Register to          = c_rarg1;  // destination array address
+    const Register key         = c_rarg2;  // key array address
+    const Register keylen      = c_rarg3;
+
+    const Register temp1       = c_rarg4;
+    const Register temp2       = c_rarg5;
+    const VectorRegister vtemp = v16;
+
+    const VectorRegister round_vectors[] = {
+      v17, v18, v19, v20, v21, v22, v23, v24,
+      v25, v26, v27, v28, v29, v30, v31
+    };
+
+    address start = __ pc();
+    __ enter();
+
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vmv_v_x(vtemp, zr);
+    __ aesenc_loadkeys(key, keylen, temp1);
+    __ aesecb_encrypt(from, to, keylen, round_vectors, vtemp);
+
+    __ mv(c_rarg0, 0);
+
+    __ leave();
+    __ ret();
+
+    return start;
+  }
+
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //
+  address generate_aescrypt_decryptBlock() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "aescrypt_decryptBlock");
+    Label L_doLast;
+
+    const Register from        = c_rarg0;  // source array address
+    const Register to          = c_rarg1;  // destination array address
+    const Register key         = c_rarg2;  // key array address
+    const Register keylen      = c_rarg3;
+
+    const Register temp1       = c_rarg4;
+    const Register temp2       = c_rarg5;
+    const VectorRegister vtemp = v6;
+
+    address start = __ pc();
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vle64_v(v0, from);
+    __ vmv_v_x(vtemp, zr);
+    __ vle64_v(v5, key);
+    __ addi(key, key, 16);
+
+    __ vle64_v(v1, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v2, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v3, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v4, key);
+    __ addi(key, key, 16);
+
+    __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v5, v5);
+
+    __ vrev8_v(v1, v1);
+    __ vrev8_v(v2, v2);
+    __ vrev8_v(v3, v3);
+    __ vrev8_v(v4, v4);
+
+    __ vxor_vv(v0, v0, v1);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v2);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v3);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v4);
+    __ vaesdm_vv(v0, vtemp);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vle64_v(v1, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v2, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v3, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v4, key);
+    __ addi(key, key, 16);
+
+    __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v1, v1);
+    __ vrev8_v(v2, v2);
+    __ vrev8_v(v3, v3);
+    __ vrev8_v(v4, v4);
+
+    __ vxor_vv(v0, v0, v1);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v2);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v3);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v4);
+    __ vaesdm_vv(v0, vtemp);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vle64_v(v1, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v2, key);
+    __ addi(key, key, 16);
+
+    __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v1, v1);
+    __ vrev8_v(v2, v2);
+
+    __ mv(temp2, 44);
+    __ beq(keylen, temp2, L_doLast);
+
+    __ vxor_vv(v0, v0, v1);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v2);
+    __ vaesdm_vv(v0, vtemp);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vle64_v(v1, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v2, key);
+    __ addi(key, key, 16);
+
+    __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v1, v1);
+    __ vrev8_v(v2, v2);
+
+    __ mv(temp2, 52);
+    __ beq(keylen, temp2, L_doLast);
+
+    __ vxor_vv(v0, v0, v1);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v2);
+    __ vaesdm_vv(v0, vtemp);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vle64_v(v1, key);
+    __ addi(key, key, 16);
+    __ vle64_v(v2, key);
+    __ addi(key, key, 16);
+
+    __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v1, v1);
+    __ vrev8_v(v2, v2);
+
+    __ bind(L_doLast);
+
+    __ vxor_vv(v0, v0, v1);
+    __ vaesdm_vv(v0, vtemp);
+    __ vxor_vv(v0, v0, v2);
+    __ vaesdf_vv(v0, v5);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vse64_v(v0, to);
+
+    __ mv(c_rarg0, 0);
+
+    __ leave();
+    __ ret();
+
+    return start;
+  }
+
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //   c_rarg3   - r vector byte array address
+  //   c_rarg4   - input length
+  //
+  address generate_cipherBlockChaining_encryptAESCrypt() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "cipherBlockChaining_encryptAESCrypt");
+
+    Label L_loadkeys_44, L_loadkeys_52, L_aes_loop, L_rounds_44, L_rounds_52, _L_finish;
+
+    const Register from        = c_rarg0;  // source array address
+    const Register to          = c_rarg1;  // destination array address
+    const Register key         = c_rarg2;  // key array address
+    const Register rvec        = c_rarg3;  // r byte array initialized from initvector array address
+                                           // and left with the results of the last encryption block
+    const Register len_reg     = c_rarg4;  // src len (must be multiple of blocksize 16)
+    const Register keylen      = t2;
+
+    const Register temp1       = x28;      // t3
+    const Register temp2       = x29;      // t4
+    const Register temp3       = x30;      // t5
+    const VectorRegister vtemp = v6;
+
+    address start = __ pc();
+
+      __ enter();
+
+      __ mv(temp3, len_reg);
+      __ blez(temp3, _L_finish);
+
+      __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v0, rvec);
+      __ vmv_v_x(vtemp, zr);  
+
+      __ mv(temp2, 52);
+      __ blt(keylen, temp2, L_loadkeys_44);
+      __ beq(keylen, temp2, L_loadkeys_52);
+
+      __ vle64_v(v17, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v18, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v17, v17);
+      __ vrev8_v(v18, v18);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+    __ bind(L_loadkeys_52);
+      __ vle64_v(v19, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v20, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v19, v19);
+      __ vrev8_v(v20, v20);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+    __ bind(L_loadkeys_44);
+      __ vle64_v(v21, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v22, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v23, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v24, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v21, v21);
+      __ vrev8_v(v22, v22);
+      __ vrev8_v(v23, v23);
+      __ vrev8_v(v24, v24);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v25, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v26, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v27, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v28, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v25, v25);
+      __ vrev8_v(v26, v26);
+      __ vrev8_v(v27, v27);
+      __ vrev8_v(v28, v28);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v29, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v30, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v31, key);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v29, v29);
+      __ vrev8_v(v30, v30);
+      __ vrev8_v(v31, v31);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+    __ bind(L_aes_loop);
+      __ vle64_v(v1, from);
+      __ addi(from, from, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vxor_vv(v0, v0, v1);
+
+      __ blt(keylen, temp2, L_rounds_44);
+      __ beq(keylen, temp2, L_rounds_52);
+
+      __ vxor_vv(v0, v0, v17);
+      __ vaesem_vv(v0, v18);
+      __ vaesem_vv(v0, vtemp);
+
+    __ bind(L_rounds_52);
+      __ vxor_vv(v0, v0, v19);
+      __ vaesem_vv(v0, v20);
+      __ vaesem_vv(v0, vtemp);
+
+    __ bind(L_rounds_44);
+      __ vxor_vv(v0, v0, v21);
+      __ vaesem_vv(v0, v22);
+      __ vaesem_vv(v0, v23);
+      __ vaesem_vv(v0, v24);
+      __ vaesem_vv(v0, v25);
+      __ vaesem_vv(v0, v26);
+      __ vaesem_vv(v0, v27);
+      __ vaesem_vv(v0, v28);
+      __ vaesem_vv(v0, v29);
+      __ vaesem_vv(v0, v30);
+      __ vaesef_vv(v0, vtemp);
+
+      __ vxor_vv(v0, v0, v31);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vse64_v(v0, to);
+      __ addi(to, to, 16);
+
+      __ sub(len_reg, len_reg, 16);
+      __ bnez(len_reg, L_aes_loop);
+
+      __ vse64_v(v0, rvec);
+
+    __ bind(_L_finish);
+      __ mv(c_rarg0, temp3);
+
+      __ leave();
+      __ ret();
+
+      return start;
+  }
+
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //   c_rarg3   - r vector byte array address
+  //   c_rarg4   - input length
+  //
+  // Output:
+  //   r0       - input length
+  //
+  address generate_cipherBlockChaining_decryptAESCrypt() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "cipherBlockChaining_decryptAESCrypt");
+
+    Label L_loadkeys_44, L_loadkeys_52, L_aes_loop, L_rounds_44, L_rounds_52, _L_finish;
+
+    const Register from        = c_rarg0;  // source array address
+    const Register to          = c_rarg1;  // destination array address
+    const Register key         = c_rarg2;  // key array address
+    const Register rvec        = c_rarg3;  // r byte array initialized from initvector array address
+                                           // and left with the results of the last encryption block
+    const Register len_reg     = c_rarg4;  // src len (must be multiple of blocksize 16)
+    const Register keylen      = t2;
+
+    const Register temp1       = x28;      // t3
+    const Register temp2       = x29;      // t4
+    const Register temp3       = x30;      // t5
+    const VectorRegister vtemp = v6;
+
+    address start = __ pc();
+
+      __ enter();
+
+      __ mv(temp3, len_reg);
+      __ blez(temp3, _L_finish);
+
+      __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v2, rvec);
+      __ vmv_v_x(vtemp, zr);
+      __ vle64_v(v31, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v31, v31);
+
+      __ mv(temp2, 52);
+      __ blt(keylen, temp2, L_loadkeys_44);
+      __ beq(keylen, temp2, L_loadkeys_52);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v17, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v18, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v17, v17);
+      __ vrev8_v(v18, v18);
+
+    __ bind(L_loadkeys_52);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v19, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v20, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v19, v19);
+      __ vrev8_v(v20, v20);
+
+    __ bind(L_loadkeys_44);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v21, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v22, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v23, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v24, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v21, v21);
+      __ vrev8_v(v22, v22);
+      __ vrev8_v(v23, v23);
+      __ vrev8_v(v24, v24);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v25, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v26, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v27, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v28, key);
+      __ addi(key, key, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v25, v25);
+      __ vrev8_v(v26, v26);
+      __ vrev8_v(v27, v27);
+      __ vrev8_v(v28, v28);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v29, key);
+      __ addi(key, key, 16);
+      __ vle64_v(v30, key);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vrev8_v(v29, v29);
+      __ vrev8_v(v30, v30);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+    __ bind(L_aes_loop);
+
+      __ vle64_v(v0, from);
+      __ addi(from, from, 16);
+
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ vor_vv(v1, v0, v0);
+
+      __ blt(keylen, temp2, L_rounds_44);
+      __ beq(keylen, temp2, L_rounds_52);
+
+      __ vxor_vv(v0, v0, v17);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v18);
+      __ vaesdm_vv(v0, vtemp);
+
+    __ bind(L_rounds_52);
+      __ vxor_vv(v0, v0, v19);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v20);
+      __ vaesdm_vv(v0, vtemp);
+
+    __ bind(L_rounds_44);
+      __ vxor_vv(v0, v0, v21);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v22);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v23);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v24);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v25);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v26);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v27);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v28);
+      __ vaesdm_vv(v0, vtemp);
+      __ vxor_vv(v0, v0, v29);
+      __ vaesdm_vv(v0, vtemp);
+
+      __ vxor_vv(v0, v0, v30);
+      __ vaesdf_vv(v0, vtemp);
+
+      __ vxor_vv(v0, v0, v31);
+      __ vxor_vv(v0, v0, v2);
+
+      __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+      __ vse64_v(v0, to);
+      __ addi(to, to, 16);
+
+      __ vor_vv(v2, v1, v1);
+
+      __ sub(len_reg, len_reg, 16);
+      __ bnez(len_reg, L_aes_loop);
+
+      __ vse64_v(v2, rvec);
+
+    __ bind(_L_finish);
+      __ mv(c_rarg0, temp3);
+
+      __ leave();
+      __ ret();
+
+    return start;
+  }
+
+  // Big-endian 128-bit + 64-bit -> 128-bit addition.
+  // Inputs: 128-bits. in is preserved.
+  // The least-significant 64-bit word is in the upper dword of each vector.
+  // inc (the 64-bit increment) is preserved. Its lower dword must be zero.
+  // Also no vector registers are free by the time this function is called, 
+  // so vtemps are preserved.
+  // Output: result
+  void be_add_128_64(VectorRegister result, VectorRegister in, VectorRegister inc, VectorRegister vtemp1,
+                     VectorRegister vtemp2, Register temp1) {
+    assert_different_registers(result, vtemp1, inc, vtemp2);
+
+    __ sub(sp, sp, 16);
+    __ vse64_v(vtemp1, sp);
+    __ sub(sp, sp, 16);
+    __ vse64_v(vtemp2, sp);
+    __ sub(sp, sp, 16);
+    __ vse64_v(v0, sp);
+
+    // __ addv(result, __ T2D, in, inc);      // Add inc to the least-significant dword of
+    //                                        // input
+    __ vadd_vv(result, in, inc);
+
+    __ mv(temp1, right_n_bits(64));
+
+    // __ cm(__ HI, tmp, __ T2D, inc, result);// Check for result overflowing
+    // Different order for inc, result due to absence of vmsgtu.vv instruction in RISC-V Vector Spec
+    __ vmsltu_vv(v0, result, inc); // First two bits (if SEW=m64) of v0[0] are showing the comparison results
+    __ vmv_v_i(vtemp1, 0);
+    __ vmerge_vxm(vtemp1, vtemp1, temp1); // v0 is a mask register
+
+    // __ ext(tmp, __ T16B, tmp, tmp, 0x08);  // Swap LSD of comparison result to MSD and
+    //                                        // MSD == 0 (must be!) to LSD
+    __ vslidedown_vi(vtemp2, vtemp1, 1);
+    __ vslideup_vi(vtemp2, vtemp1, 1);
+
+    // __ subv(result, __ T2D, result, tmp);  // Subtract -1 from MSD if there was an overflow
+    __ vsub_vv(result, result, vtemp2);
+
+    __ vle64_v(v0, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(vtemp2, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(vtemp1, sp);
+    __ addi(sp, sp, 16);
+  }
+
+  // CTR AES crypt.
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //   c_rarg3   - counter vector byte array address
+  //   c_rarg4   - input length
+  //   c_rarg5   - saved encryptedCounter start
+  //   c_rarg6   - saved used length
+  //
+  // Output:
+  //   r0       - input length
+  //
+  address generate_counterMode_AESCrypt() {
+    const Register in = c_rarg0;
+    const Register out = c_rarg1;
+    const Register key = c_rarg2;
+    const Register counter = c_rarg3;
+    const Register saved_len = c_rarg4, len = x7; // t2
+    const Register saved_encrypted_ctr = c_rarg5;
+    const Register used_ptr = c_rarg6, used = x28; // t3
+
+    const Register offset = x29; // t4
+    const Register keylen = x30; // t5
+
+    const Register temp1  = x31; // t6
+    const Register temp2  = c_rarg7;
+    const VectorRegister vtemp1 = v30;
+    const VectorRegister vtemp2 = v31;
+
+    const VectorRegister vectors[] = {
+      v0, v1, v2,  v3,  v4,  v5,  v6,  v7,
+      v8, v9, v10, v11, v12, v13, v14, v15
+    };
+
+    const VectorRegister round_vectors[] = {
+      v17, v18, v19, v20, v21, v22, v23, v24,
+      v25, v26, v27, v28, v29, v30, v31
+    };
+
+    const unsigned char block_size = 16;
+    const int bulk_width = 4;
+    // NB: bulk_width can be 4 or 8. 8 gives slightly faster
+    // performance with larger data sizes, but it also means that the
+    // fast path isn't used until you have at least 8 blocks, and up
+    // to 127 bytes of data will be executed on the slow path. For
+    // that reason, and also so as not to blow away too much icache, 4
+    // blocks seems like a sensible compromise.
+
+    // Algorithm:
+    //
+    //    if (len == 0) {
+    //        goto DONE;
+    //    }
+    //    int result = len;
+    //    do {
+    //        if (used >= blockSize) {
+    //            if (len >= bulk_width * blockSize) {
+    //                CTR_large_block();
+    //                if (len == 0)
+    //                    goto DONE;
+    //            }
+    //            for (;;) {
+    //                16ByteVector v0 = counter;
+    //                embeddedCipher.encryptBlock(v0, 0, encryptedCounter, 0);
+    //                used = 0;
+    //                if (len < blockSize)
+    //                    break;    /* goto NEXT */
+    //                16ByteVector v1 = load16Bytes(in, offset);
+    //                v1 = v1 ^ encryptedCounter;
+    //                store16Bytes(out, offset);
+    //                used = blockSize;
+    //                offset += blockSize;
+    //                len -= blockSize;
+    //                if (len == 0)
+    //                    goto DONE;
+    //            }
+    //        }
+    //      NEXT:
+    //        out[outOff++] = (byte)(in[inOff++] ^ encryptedCounter[used++]);
+    //        len--;
+    //    } while (len != 0);
+    //  DONE:
+    //    return result;
+    //
+    // CTR_large_block()
+    //    Wide bulk encryption of whole blocks.
+
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "counterMode_AESCrypt");
+    const address start = __ pc();
+    __ enter();
+
+    Label DONE, CTR_large_block, large_block_return;
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+    __ lwu(used, Address(used_ptr, 0));
+    __ beqz(saved_len, DONE);
+
+    __ mv(len, saved_len);
+    __ mv(offset, 0);
+
+    // Compute #rounds for AES based on the length of the key array
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+    __ aesenc_loadkeys(key, keylen, temp1);
+
+    {
+      Label L_CTR_loop, NEXT;
+
+      __ bind(L_CTR_loop);
+
+      __ mv(temp1, block_size);
+      __ bltu(used, temp1, NEXT);
+
+      // Maybe we have a lot of data
+      __ mv(temp1, bulk_width * block_size);
+      __ bge(len, temp1, CTR_large_block);
+      __ bind(large_block_return);
+      __ beqz(len, DONE);
+
+      // Setup the counter
+      __ vmv_v_x(v4, zr);
+      __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+      __ mv(temp1, 1);
+      __ vmv_v_x(v5, temp1);
+      __ vsetivli(temp2, 2, Assembler::e64, Assembler::m1);
+
+      __ vmv_v_x(v4, temp1); // v4 contains { 0, 1 }
+      __ vmv_s_x(v4, zr);
+
+      // 128-bit big-endian increment
+      __ vle64_v(v0, counter);
+      __ vrev8_v(v16, v0);
+
+      be_add_128_64(v16, v16, v4, v5, vtemp1, temp1);
+
+      __ vrev8_v(v16, v16);
+      __ vse64_v(v16, counter);
+
+      // Previous counter value is in v0
+      // v4 contains { 0, 1 }
+
+      {
+        // We have fewer than bulk_width blocks of data left. Encrypt
+        // them one by one until there is less than a full block
+        // remaining, being careful to save both the encrypted counter
+        // and the counter.
+
+        Label inner_loop;
+        __ bind(inner_loop);
+        // Counter to encrypt is in v0
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+
+        __ sub(sp, sp, 16);
+        __ vse64_v(v16, sp);
+        __ vmv_v_x(v16, zr);
+        __ aesecb_encrypt(noreg, noreg, keylen, round_vectors, v16);
+        __ vle64_v(v16, sp);
+        __ addi(sp, sp, 16);
+
+        __ vse64_v(v0, saved_encrypted_ctr);
+
+        // Do we have a remaining full block?
+        __ mv(used, 0);
+        __ mv(temp1, block_size);
+        __ blt(len, temp1, NEXT);
+
+        // Yes, we have a full block
+        __ add(temp1, in, offset);
+        __ vle64_v(v1, temp1);
+        __ vxor_vv(v1, v1, v0);
+        __ add(temp1, out, offset);
+        __ vse64_v(v1, temp1);
+        __ mv(used, block_size);
+        __ add(offset, offset, block_size);
+
+        __ sub(len, len, block_size);
+        __ beqz(len, DONE);
+
+        // Increment the counter, store it back
+        __ vor_vv(v0, v16, v16);
+        __ vrev8_v(v16, v16);
+
+        be_add_128_64(v16, v16, v4, v5, vtemp1, temp1);
+
+        __ vrev8_v(v16, v16);
+        __ vse64_v(v16, counter); // Save the incremented counter back
+
+        __ j(inner_loop);
+      }
+
+      __ bind(NEXT);
+
+      // Encrypt a single byte, and loop.
+      // We expect this to be a rare event.
+      __ add(t1, in, offset);
+      __ lbu(temp1, Address(t1, 0));
+      __ add(t1, saved_encrypted_ctr, used);
+      __ lbu(temp2, Address(t1, 0));
+      __ xorr(temp1, temp1, temp2);
+      __ add(t1, out, offset);
+      __ sb(temp1, Address(t1, 0));
+      __ add(offset, offset, 1);
+      __ add(used, used, 1);
+      __ sub(len, len, 1);
+
+      __ bnez(len, L_CTR_loop);
+    }
+
+    __ bind(DONE);
+    __ sw(used, Address(used_ptr, 0));
+    __ mv(c_rarg0, saved_len);
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret();
+
+    // Bulk encryption
+
+    __ bind (CTR_large_block);
+    assert(bulk_width == 4 || bulk_width == 8, "must be");
+
+    if (bulk_width == 8) {
+      __ sub(sp, sp, 4 * 16);
+
+      __ vse64_v(v12, sp);
+      __ addi(temp1, sp, 16);
+      __ vse64_v(v13, temp1);
+      __ addi(temp1, temp1, 16);
+      __ vse64_v(v14, temp1);
+      __ addi(temp1, temp1, 16);
+      __ vse64_v(v15, temp1);
+    }
+    __ sub(sp, sp, 4 * 16);
+
+    __ vse64_v(v8, sp);
+    __ addi(temp1, sp, 16);
+    __ vse64_v(v9, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v10, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v11, temp1);
+
+    RegSet saved_regs = (RegSet::of(in, out, offset)
+                         + RegSet::of(saved_encrypted_ctr, used_ptr, len));
+    __ push_reg(saved_regs, sp);
+    __ andi(len, len, -16 * bulk_width); // 8/4 encryptions, 16 bytes per encryption
+
+    __ add(in, in, offset);
+    __ add(out, out, offset);
+
+    // Keys should already be loaded into the correct registers
+
+    __ vle64_v(v0, counter);
+    __ vrev8_v(v16, v0);
+
+    // AES/CTR loop
+    {
+      Label L_CTR_loop;
+      __ bind(L_CTR_loop);
+
+      // Setup the counters
+      __ vmv_v_x(v8, zr);
+      __ mv(temp1, 1);
+      __ vmv_v_x(v9, temp1);
+
+      __ vmv_v_x(v8, temp1); // v8 contains { 0, 1 }
+      __ vmv_s_x(v8, zr);
+
+      for (int i = 0; i < bulk_width; i++) {
+        VectorRegister v0_ofs = vectors[i];
+        __ vrev8_v(v0_ofs, v16);
+
+        be_add_128_64(v16, v16, v8, v9, vtemp1, temp1);
+      }
+      __ vle64_v(v8, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v9, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v10, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v11, in);
+      __ addi(in, in, 16);
+
+      // Encrypt the counters
+      __ sub(sp, sp, 16);
+      __ vse64_v(v16, sp);
+      __ vmv_v_x(v16, zr);
+      __ aesecb_encrypt(noreg, noreg, keylen, round_vectors, v16, v0, bulk_width);
+      __ vle64_v(v16, sp);
+      __ addi(sp, sp, 16);
+
+      if (bulk_width == 8) {
+        __ vle64_v(v12, counter);
+        __ addi(in, in, 16);
+        __ vle64_v(v13, counter);
+        __ addi(in, in, 16);
+        __ vle64_v(v14, counter);
+        __ addi(in, in, 16);
+        __ vle64_v(v15, counter);
+        __ addi(in, in, 16);
+      }
+
+      // XOR the encrypted counters with the inputs
+      for (int i = 0; i < bulk_width; i++) {
+        VectorRegister v0_ofs = vectors[i];
+        VectorRegister v8_ofs = vectors[8 + i];
+
+        __ vxor_vv(v0_ofs, v0_ofs, v8_ofs);
+      }
+
+      // Write the encrypted data
+      __ vse64_v(v0, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v1, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v2, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v3, out);
+      __ addi(out, out, 16);
+
+      if (bulk_width == 8) {
+        __ vse64_v(v4, out);
+        __ addi(out, out, 16);
+        __ vse64_v(v5, out);
+        __ addi(out, out, 16);
+        __ vse64_v(v6, out);
+        __ addi(out, out, 16);
+        __ vse64_v(v7, out);
+        __ addi(out, out, 16);
+      }
+
+      __ sub(len, len, 16 * bulk_width);
+      __ bnez(len, L_CTR_loop);
+    }
+
+    // Save the counter back where it goes
+    __ vrev8_v(v16, v16);
+    __ vse64_v(v16, counter);
+
+    __ pop_reg(saved_regs, sp);
+
+    __ vle64_v(v8, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v9, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v10, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v11, sp);
+    __ addi(sp, sp, 16);
+    if (bulk_width == 8) {
+      __ vle64_v(v12, sp);
+      __ addi(sp, sp, 16);
+      __ vle64_v(v13, sp);
+      __ addi(sp, sp, 16);
+      __ vle64_v(v14, sp);
+      __ addi(sp, sp, 16);
+      __ vle64_v(v15, sp);
+      __ addi(sp, sp, 16);
+    }
+
+    __ andi(temp1, len, -16 * bulk_width);
+    __ sub(len, len, temp1);
+    __ add(offset, offset, temp1);
+    __ mv(used, 16);
+    __ sw(used, Address(used_ptr, 0));
+
+    __ j(large_block_return);
+
+    return start;
+  }
+
+  // Vector AES Galois Counter Mode implementation. Parameters:
+  //
+  // in = c_rarg0
+  // len = c_rarg1
+  // ct = c_rarg2 - ciphertext that ghash will read (in for encrypt, out for decrypt)
+  // out = c_rarg3
+  // key = c_rarg4
+  // state = c_rarg5 - GHASH.state
+  // subkeyHtbl = c_rarg6 - powers of H
+  // counter = c_rarg7 - 16 bytes of CTR
+  // return - number of processed bytes
+  address generate_galoisCounterMode_AESCrypt() {
+    address ghash_polynomial = __ pc();
+    __ emit_int64(0x87);  // The low-order bits of the field
+                          // polynomial (i.e. p = z^7+z^2+z+1)
+                          // repeated in the low and high parts of a
+                          // 128-bit vector
+    __ emit_int64(0x87);
+
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "galoisCounterMode_AESCrypt");
+    address start = __ pc();
+    __ enter();
+
+    const Register in = c_rarg0;
+    const Register len = c_rarg1;
+    const Register ct = c_rarg2;
+    const Register out = c_rarg3;
+    // and updated with the incremented counter in the end
+
+    const Register key = c_rarg4;
+    const Register state = c_rarg5;
+
+    const Register subkeyHtbl = c_rarg6;
+
+    const Register counter = c_rarg7;
+
+    const Register temp0 = x28; // t3
+    const Register temp1 = x29; // t4
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+
+    const Register keylen = t2;
+    // Save state before entering routine
+    __ sub(sp, sp, 4 * 16);
+    __ vse64_v(v12, sp);
+    __ addi(temp1, sp, 16);
+    __ vse64_v(v13, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v14, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v15, temp1);
+
+    __ sub(sp, sp, 4 * 16);
+    __ vse64_v(v8, sp);
+    __ addi(temp1, sp, 16);
+    __ vse64_v(v9, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v10, temp1);
+    __ addi(temp1, temp1, 16);
+    __ vse64_v(v11, temp1);
+
+    __ andi(len, len, -16 * 8); // 8 encryptions, 16 bytes per encryption
+
+    __ sub(sp, sp, 2 * wordSize);
+    __ sd(len, Address(sp));
+
+    Label DONE;
+    __ beqz(len, DONE);
+
+    // Compute #rounds for AES based on the length of the key array
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+
+    __ aesenc_loadkeys(key, keylen, temp0);
+    __ vle64_v(v0, counter); // v0 contains the first counter
+    __ vsetivli(temp0, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v16, v0); // v16 contains byte-reversed counter
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+
+    // AES/CTR loop
+    {
+      Label L_CTR_loop;
+      __ bind(L_CTR_loop);
+
+      __ vsetivli(temp0, 4, Assembler::e32, Assembler::m1);
+      __ mv(temp0, 0);
+      __ vmv_v_i(v8, 0);
+      __ vmv_v_i(v9, 1);
+      __ vmv_s_x(v9, temp0);
+      __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+      __ vslideup_vi(v8, v9, 1);
+
+      assert(v0->encoding() < v8->encoding(), "");
+      __ vsetivli(temp0, 4, Assembler::e32, Assembler::m1);
+      for (int i = v0->encoding(); i < v8->encoding(); i++) {
+        VectorRegister f = as_VectorRegister(i);
+        __ vrev8_v(f, v16);
+        __ vadd_vv(v16, v16, v8);
+      }
+
+      __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v8, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v9, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v10, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v11, in);
+      __ addi(in, in, 16);
+
+      // Encrypt the counters
+      const VectorRegister round_vectors[] = {
+        v17, v18, v19, v20, v21, v22, v23, v24,
+        v25, v26, v27, v28, v29, v30, v31
+      };
+      __ sub(sp, sp, 16);
+      __ vse64_v(v16, sp);
+      __ vmv_v_x(v16, zr);
+      __ aesecb_encrypt(noreg, noreg, keylen, round_vectors, v16, v0, /*unrolls*/8);
+      __ vle64_v(v16, sp);
+      __ addi(sp, sp, 16);
+
+      __ vle64_v(v12, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v13, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v14, in);
+      __ addi(in, in, 16);
+      __ vle64_v(v15, in);
+      __ addi(in, in, 16);
+
+      // XOR the encrypted counters with the inputs
+      for (int i = 0; i < 8; i++) {
+        VectorRegister v0_ofs = as_VectorRegister(v0->encoding() + i);
+        VectorRegister v8_ofs = as_VectorRegister(v8->encoding() + i);
+        __ vxor_vv(v0_ofs, v0_ofs, v8_ofs);
+      }
+      __ vse64_v(v0, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v1, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v2, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v3, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v4, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v5, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v6, out);
+      __ addi(out, out, 16);
+      __ vse64_v(v7, out);
+      __ addi(out, out, 16);
+
+      __ sub(len, len, 16 * 8);
+      __ bnez(len, L_CTR_loop);
+    }
+
+    __ vsetivli(temp0, 4, Assembler::e32, Assembler::m1);
+    __ vrev8_v(v16, v16);
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vse64_v(v16, counter);
+
+    // __ ldr(len, Address(sp));
+    __ ld(len, Address(sp));
+    __ srli(len, len, exact_log2(16));
+
+    // GHASH/CTR loop
+    // Note: copied from GHASH intrinsic
+    Register subkeyH = subkeyHtbl;
+    Register data    = ct;
+    Register blocks  = len;
+
+    VectorRegister vzr = v30;
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    // zero register
+    __ vmv_v_x(vzr, zr);
+
+    __ vle64_v(v10, state);
+    __ vle64_v(v1, subkeyH);
+
+    // Bit-reverse words in state and subkeyH
+    __ vrev8_v(v10, v10);
+    __ vbrev8_v(v10, v10);
+    __ vrev8_v(v1, v1);
+    __ vbrev8_v(v1, v1);
+
+    __ mv(temp0, 0x87);   // The low-order bits of the field
+                          // polynomial (i.e. p = z^7+z^2+z+1)
+                          // repeated in the low and high parts of a
+                          // 128-bit vector
+    __ vmv_v_x(v26, temp0);
+
+    // long-swap subkeyH into v1
+    __ vslidedown_vi(v16, v1, 1);
+    __ vslideup_vi(v16, v1, 1);
+    // xor subkeyH into subkeyL (Karatsuba: (A1+A0))
+    __ vxor_vv(v16, v16, v1);
+
+    {
+      Label L_ghash_loop;
+      __ bind(L_ghash_loop);
+
+      __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+      __ vle64_v(v2, data);     // Load the data, bit
+                                // reversing each byte
+      __ addi(data, data, 0x10);
+
+      __ vsetivli(temp0, 16, Assembler::e8, Assembler::m1);
+      __ vbrev_v(v2, v2);
+
+      // bit-swapped data ^ bit-swapped state
+      __ vxor_vv(v2, v10, v2);
+
+      // Multiply state in v2 by subkey in v1
+      ghash_multiply(/*result_lo*/v5, /*result_hi*/v7,
+                     /*a*/v1, /*b*/v2, /*a1_xor_a0*/v16,
+                     /*temps*/v6, v20, v18, v21, temp0, temp1);
+      // Reduce v7:v5 by the field polynomial
+      ghash_reduce(v10, v5, v7, v26, vzr, v20, v17, v19, temp0);
+
+      __ sub(blocks, blocks, 1);
+      __ bgtz(blocks, L_ghash_loop);
+    }
+
+    // The bit-reversed result is at this point in v10
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vrev8_v(v1, v10);
+    __ vbrev8_v(v1, v1);
+
+    __ vsetivli(temp0, 2, Assembler::e64, Assembler::m1);
+    __ vse64_v(v1, state);
+    // NOTE: definately true
+
+  __ bind(DONE);
+    // Return the number of bytes processed
+    __ ld(c_rarg0, Address(sp));
+    __ addi(sp, sp, 2 * wordSize);
+
+    __ vle64_v(v8, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v9, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v10, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v11, sp);
+    __ addi(sp, sp, 16);
+
+    __ vle64_v(v12, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v13, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v14, sp);
+    __ addi(sp, sp, 16);
+    __ vle64_v(v15, sp);
+    __ addi(sp, sp, 16);
+
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret();
+    return start;
+  }
+
+  /**
+    * Performs encryption operation.
+    *
+    * The input plain text in, starting at inOff and ending at
+    * (inOff + len - 1), is encrypted.
+    * The result is stored in out, starting at outOff.
+    *
+    * @return the length of the encrypted data
+    */
+  address generate_electronicCodeBook_encryptAESCrypt() {
+    assert(UseAESIntrinsics, "need AES instructions (Zvkned extension) support");
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "electronicCodeBook_encryptAESCrypt");
+
+    const Register from      = c_rarg0; // source array address
+    const Register res       = c_rarg0;
+    const Register to        = c_rarg1; // destination array address
+    const Register key       = c_rarg2; // key array address
+    const Register len       = c_rarg3; // src len (must be multiple of blocksize 16)
+    const Register counter   = c_rarg4;
+    const Register blockSize = c_rarg5;
+    const Register keylen    = c_rarg6;
+    const Register temp1     = c_rarg7;
+
+    const VectorRegister vtemp = v16;
+    const VectorRegister round_vectors[] = {
+      v17, v18, v19, v20, v21, v22, v23, v24,
+      v25, v26, v27, v28, v29, v30, v31
+    };
+    Label L_ecb_encrypt_loop, L_ecb_encrypt_end;
+    address start = __ pc();
+    __ enter();
+
+    // for (int i = len; i >= blockSize; i -= blockSize) {
+    //     embeddedCipher.encryptBlock(in, inOff, out, outOff);
+    //     inOff += blockSize;
+    //     outOff += blockSize;
+    // }
+    // return len;
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));    
+    __ mv(blockSize, 16);
+    __ mv(counter, len);
+    __ beqz(counter, L_ecb_encrypt_end);
+
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vmv_v_x(vtemp, zr);
+    __ aesenc_loadkeys(key, keylen, temp1);
+
+    __ BIND(L_ecb_encrypt_loop);
+      __ aesecb_encrypt(from, to, keylen, round_vectors, vtemp);
+      __ add(from, from, blockSize);
+      __ add(to, to, blockSize);
+      __ sub(counter, counter, blockSize);
+      __ bge(counter, blockSize, L_ecb_encrypt_loop);
+
+    __ BIND(L_ecb_encrypt_end)
+      __ mv(res, len);
+      __ leave();
+      __ ret();
+
+    return start;
+  }
+
+  address generate_electronicCodeBook_decryptAESCrypt() {
+    assert(UseAESIntrinsics, "need AES instructions (Zvkned extension) support");
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "electronicCodeBook_decryptAESCrypt");
+
+    const Register from      = c_rarg0; // source array address
+    const Register res       = c_rarg0;
+    const Register to        = c_rarg1; // destination array address
+    const Register key       = c_rarg2; // key array address
+    const Register len       = c_rarg3; // src len (must be multiple of blocksize 16)
+    const Register counter   = c_rarg4;
+    const Register blockSize = c_rarg5;
+    const Register keylen    = c_rarg6;
+    const Register temp1     = c_rarg7;
+    const Register temp2     = x28; // t3
+    const Register temp3     = x29; // t4
+    const VectorRegister vtemp = v16;
+
+    Label L_ecb_decrypt_loop, L_ecb_decrypt_end, L_ecb_decrypt_doLast;
+    address start = __ pc();
+    __ enter();
+
+    // for (int i = len; i >= blockSize; i -= blockSize) {
+    //     embeddedCipher.decryptBlock(in, inOff, out, outOff);
+    //     inOff += blockSize;
+    //     outOff += blockSize;
+    // }
+    // return len;
+    __ lwu(keylen, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+    __ mv(blockSize, 16);
+    __ mv(counter, len);
+    __ mv(temp3, key);
+    __ beqz(counter, L_ecb_decrypt_end);
+    __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+    __ vmv_v_x(vtemp, zr);
+
+    __ BIND(L_ecb_decrypt_loop);
+      {
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vle64_v(v0, from);
+        __ vle64_v(v5, key);
+        __ addi(key, key, 16);
+
+        __ vle64_v(v1, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v2, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v3, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v4, key);
+        __ addi(key, key, 16);
+
+        __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+        __ vrev8_v(v5, v5);
+
+        __ vrev8_v(v1, v1);
+        __ vrev8_v(v2, v2);
+        __ vrev8_v(v3, v3);
+        __ vrev8_v(v4, v4);
+
+        __ vxor_vv(v0, v0, v1);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v2);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v3);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v4);
+        __ vaesdm_vv(v0, vtemp);
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vle64_v(v1, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v2, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v3, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v4, key);
+        __ addi(key, key, 16);
+
+        __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+        __ vrev8_v(v1, v1);
+        __ vrev8_v(v2, v2);
+        __ vrev8_v(v3, v3);
+        __ vrev8_v(v4, v4);
+
+        __ vxor_vv(v0, v0, v1);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v2);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v3);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v4);
+        __ vaesdm_vv(v0, vtemp);
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vle64_v(v1, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v2, key);
+        __ addi(key, key, 16);
+
+        __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+        __ vrev8_v(v1, v1);
+        __ vrev8_v(v2, v2);
+
+        __ mv(temp2, 44);
+        __ beq(keylen, temp2, L_ecb_decrypt_doLast);
+
+        __ vxor_vv(v0, v0, v1);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v2);
+        __ vaesdm_vv(v0, vtemp);
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vle64_v(v1, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v2, key);
+        __ addi(key, key, 16);
+
+        __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+        __ vrev8_v(v1, v1);
+        __ vrev8_v(v2, v2);
+
+        __ mv(temp2, 52);
+        __ beq(keylen, temp2, L_ecb_decrypt_doLast);
+
+        __ vxor_vv(v0, v0, v1);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v2);
+        __ vaesdm_vv(v0, vtemp);
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vle64_v(v1, key);
+        __ addi(key, key, 16);
+        __ vle64_v(v2, key);
+        __ addi(key, key, 16);
+
+        __ vsetivli(temp1, 4, Assembler::e32, Assembler::m1);
+        __ vrev8_v(v1, v1);
+        __ vrev8_v(v2, v2);
+
+        __ BIND(L_ecb_decrypt_doLast);
+
+        __ vxor_vv(v0, v0, v1);
+        __ vaesdm_vv(v0, vtemp);
+        __ vxor_vv(v0, v0, v2);
+        __ vaesdf_vv(v0, v5);
+
+        __ vsetivli(temp1, 2, Assembler::e64, Assembler::m1);
+        __ vse64_v(v0, to);
+      }
+      // Preserve the address of the start of the key
+      __ mv(key, temp3);
+
+      __ add(from, from, blockSize);
+      __ add(to, to, blockSize);
+      __ sub(counter, counter, blockSize);
+      __ bge(counter, blockSize, L_ecb_decrypt_loop);
+
+    __ BIND(L_ecb_decrypt_end)
+      __ mv(res, len);
+      __ leave();
+      __ ret();
+
+    return start;
+  }
+
   // code for comparing 16 bytes of strings with same encoding
   void compare_string_16_bytes_same(Label &DIFF1, Label &DIFF2) {
     const Register result = x10, str1 = x11, cnt1 = x12, str2 = x13, tmp1 = x28, tmp2 = x29, tmp4 = x7, tmp5 = x31;
@@ -5363,6 +6822,22 @@ static const int64_t right_3_bits = right_n_bits(3);
       StubRoutines::_updateBytesAdler32 = generate_updateBytesAdler32();
     }
 
+    if (UseAESIntrinsics) {
+      StubRoutines::_aescrypt_encryptBlock = generate_aescrypt_encryptBlock();
+      StubRoutines::_aescrypt_decryptBlock = generate_aescrypt_decryptBlock();
+
+      StubRoutines::_cipherBlockChaining_encryptAESCrypt = generate_cipherBlockChaining_encryptAESCrypt();
+      StubRoutines::_cipherBlockChaining_decryptAESCrypt = generate_cipherBlockChaining_decryptAESCrypt();
+
+      StubRoutines::_counterMode_AESCrypt = generate_counterMode_AESCrypt();
+
+      StubRoutines::_electronicCodeBook_encryptAESCrypt = generate_electronicCodeBook_encryptAESCrypt();
+      StubRoutines::_electronicCodeBook_decryptAESCrypt = generate_electronicCodeBook_decryptAESCrypt();
+    }
+
+    if (UseGHASHIntrinsics && UseAESIntrinsics) {
+      StubRoutines::_galoisCounterMode_AESCrypt = generate_galoisCounterMode_AESCrypt();
+    }
   }
 
   void generate_continuation_stubs() {

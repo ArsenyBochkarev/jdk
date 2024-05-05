@@ -1225,6 +1225,12 @@ public:
                        Register tmp1, Register tmp2, Register tmp3, Register tmp4,
                        Register tmp5, Register tmp6, Register product_hi);
 
+  // AES routines
+  void aesenc_loadkeys(Register key, Register keylen, Register temp1);
+  void aesecb_encrypt(Register from, Register to, Register keylen, const VectorRegister *vectors,
+                      VectorRegister vtemp = v16, VectorRegister data = v0, int unrolls = 1);
+  void aesecb_decrypt(Register from, Register to, Register key, Register keylen, Register temp1);
+
   // CRC32 code for java.util.zip.CRC32::updateBytes() intrinsic.
   void kernel_crc32(Register crc, Register buf, Register len,
         Register table0, Register table1, Register table2, Register table3,
